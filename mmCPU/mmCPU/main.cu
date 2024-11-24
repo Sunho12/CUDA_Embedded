@@ -10,7 +10,8 @@
  *       Revision:  none
  *       Compiler:  nvcc
  *
- *         Author:  Myung Kuk Yoon, myungkuk.yoon@ewha.ac.kr
+ *         Author:  Sunho Kwak, latte1210@ewhain.net
+			   Id: 2076017
  *   Organization:  Ewha Womans University
  *
  * =====================================================================================
@@ -85,7 +86,15 @@ void cpuMatrixMul(const unsigned int *h_a, const unsigned int *h_b, unsigned int
 //Write your code
 __global__
 void gpuMatrixMul(unsigned int *d_a, unsigned int *d_b, unsigned int *d_c, const int aRowSize, const int aColSize, const int bRowSize, const int bColSize){
-	assert(aColSize == bRowSize);
+	int row = blockIdx.y * blockDim.y + threadIdx.y;
+	int col = blockIdx.x * blockDim.x + threadIdx.x;
+	if (row < aRowSize && col < bColSize) {
+		unsigned int sum = 0;
+		for (int i = 0; i < aColSize; i++) {
+			sum += d_a[row * aColSize + i] * d_b[i * bColSize + col];
+		}
+		d_c[row * bColSize + col] = sum;
+	}
 }
 
 int main(){
@@ -102,17 +111,38 @@ int main(){
 	clockMeasure *ckGpu = new clockMeasure("GPU CODE");
 	ckGpu->clockReset();
 
+	// GPU 메모리
+	unsigned int *d_a, *d_b, *d_c;
+	size_t sizeA = A_H * A_W * sizeof(unsigned int);
+	size_t sizeB = B_H * B_W * sizeof(unsigned int);
+	size_t sizeC = A_H * B_W * sizeof(unsigned int);
+
+	cudaMalloc((void**)&d_a, sizeA);
+	cudaMalloc((void**)&d_b, sizeB);
+	cudaMalloc((void**)&d_c, sizeC);
+
+	// 데이터 GPU로
+	cudaMemcpy(d_a, matrixA, sizeA, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_b, matrixB, sizeB, cudaMemcpyHostToDevice);
+
+	dim3 blockDim(16, 16);
+	dim3 gridDim((B_W + blockDim.x - 1) / blockDim.x, (A_H + blockDim.y - 1) / blockDim.y);
+
+
 	for(int i = 0; i < MAX_ITER; i++){
 		ckCpu->clockResume();
 		cpuMatrixMul(matrixA, matrixB, cpuOut, A_H, A_W, B_H, B_W);
 		ckCpu->clockPause();
 
 		ckGpu->clockResume();
-		//call kernel (gpuMatrixMul(...))
+		gpuMatrixMul<<<gridDim, blockDim>>>(d_a, d_b, d_c, A_H, A_W, B_H, B_W);
 		err=cudaDeviceSynchronize();
 		ckGpu->clockPause();
 		checkCudaError(err);
 	}
+
+	// 결과 CPU로
+	cudaMemcpy(gpuOut, d_c, sizeC, cudaMemcpyDeviceToHost);
 
 	if(compareMatrix(cpuOut, gpuOut, A_H, B_W)){
 		ckCpu->clockPrint();
@@ -120,4 +150,11 @@ int main(){
 	}else{
 		printf("ERROR: Two Matrices are not same\n");
 	}
+
+	// GPU 메모리 해제
+	cudaFree(d_a);
+	cudaFree(d_b);
+	cudaFree(d_c);
+
+	return 0;
 }
