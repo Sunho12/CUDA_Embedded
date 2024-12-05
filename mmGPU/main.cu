@@ -20,12 +20,12 @@
 #include <assert.h>
 #include "clockMeasure.h"
 
-#define checkCudaError(error) 					\
-	if(error != cudaSuccess){ 				\
-		printf("%s in %s at line %d\n", 		\
-				cudaGetErrorString(error), 	\
-				__FILE__ ,__LINE__); 		\
-		exit(EXIT_FAILURE);				\
+#define checkCudaError(error) 					
+	if(error != cudaSuccess){ 				
+		printf("%s in %s at line %d\n", 		
+				cudaGetErrorString(error), 	
+				__FILE__ ,__LINE__); 		
+		exit(EXIT_FAILURE);				
 	}
 
 const int A_H = 512;
@@ -146,21 +146,27 @@ int main(){
 		ckCpu->clockPause();
 
 		ckGpu->clockResume();
+		// 1. 비동기 데이터 복사: Host → Device
 		for (int j = 0; j < NUM_STREAMS; j++) {
-            int offsetA = j * rowsPerStream * A_W;
-            int offsetC = j * rowsPerStream * B_W;
+			int offsetA = j * rowsPerStream * A_W;
+			cudaMemcpyAsync(&d_a[offsetA], &matrixA[offsetA], rowsPerStream * A_W * sizeof(unsigned int),
+							cudaMemcpyHostToDevice, streams[j]);
+		}
 
-            // 비동기 메모리 복사: 행렬 A의 일부를 GPU로 복사
-            cudaMemcpyAsync(&d_a[offsetA], &matrixA[offsetA], rowsPerStream * A_W * sizeof(unsigned int),
-                            cudaMemcpyHostToDevice, streams[j]);
-            
-            // GPU 커널 실행
-            gpuMatrixMul<<<gridSize, blockSize, 0, streams[j]>>>(&d_a[offsetA], d_b, &d_c[offsetC], rowsPerStream, A_W, B_W, B_W);
+		// 2. GPU 커널 실행
+		for (int j = 0; j < NUM_STREAMS; j++) {
+			int offsetA = j * rowsPerStream * A_W;
+			int offsetC = j * rowsPerStream * B_W;
+			gpuMatrixMul<<<gridSize, blockSize, 0, streams[j]>>>(
+				&d_a[offsetA], d_b, &d_c[offsetC], rowsPerStream, A_W, B_W, B_W);
+		}
 
-            // 결과 복사: GPU에서 CPU로 결과를 비동기 복사
-            cudaMemcpyAsync(&gpuOut[offsetC], &d_c[offsetC], rowsPerStream * B_W * sizeof(unsigned int),
-                            cudaMemcpyDeviceToHost, streams[j]);
-        }
+		// 3. 비동기 데이터 복사: Device → Host
+		for (int j = 0; j < NUM_STREAMS; j++) {
+			int offsetC = j * rowsPerStream * B_W;
+			cudaMemcpyAsync(&gpuOut[offsetC], &d_c[offsetC], rowsPerStream * B_W * sizeof(unsigned int),
+							cudaMemcpyDeviceToHost, streams[j]);
+		}
 
 		for (int i = 0; i< NUM_STREAMS; i++){
 			cudaStreamSynchronize(streams[i]);
